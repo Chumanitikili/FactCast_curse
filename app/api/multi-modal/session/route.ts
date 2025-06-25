@@ -1,6 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { auth } from "@clerk/nextjs"
-import { prisma } from "@/lib/prisma"
 
 const defaultVoiceSettings = {
   voice: "alloy",
@@ -40,19 +39,19 @@ export async function POST(request: NextRequest) {
     }
 
     // Save session to database
-    await prisma.session.create({
-      data: {
-        id: session.id,
-        userId: session.userId,
-        title: session.title,
-        mode: session.mode,
-        application: session.application,
-        version: session.version,
-        voiceSettings: session.voiceSettings,
-        isLive: session.isLive,
-        createdAt: new Date(session.createdAt),
-      },
-    })
+    // await prisma.session.create({
+    //   data: {
+    //     id: session.id,
+    //     userId: session.userId,
+    //     title: session.title,
+    //     mode: session.mode,
+    //     application: session.application,
+    //     version: session.version,
+    //     voiceSettings: session.voiceSettings,
+    //     isLive: session.isLive,
+    //     createdAt: new Date(session.createdAt),
+    //   },
+    // })
 
     return NextResponse.json({ session }, { status: 201 })
   } catch (error) {
@@ -69,12 +68,27 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const sessions = await prisma.session.findMany({
-      where: { userId },
-      orderBy: { createdAt: "desc" },
-    })
-
-    return NextResponse.json({ sessions })
+    // const sessions = await prisma.session.findMany({
+    //   where: { userId },
+    //   orderBy: { createdAt: "desc" },
+    // })
+    // Mock sessions response
+    const sessions = [
+      {
+        id: "mock_session_1",
+        userId,
+        title: "Sample Session",
+        mode: "hybrid",
+        application: "TruthCast",
+        version: "1.0.0",
+        createdAt: new Date().toISOString(),
+        voiceSettings: defaultVoiceSettings,
+        isLive: false,
+        claims: [],
+        results: [],
+      },
+    ];
+    return NextResponse.json({ sessions });
   } catch (error) {
     console.error("Error fetching sessions:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
