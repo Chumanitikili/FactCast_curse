@@ -177,4 +177,93 @@ export default function SettingsPage() {
                 </div>
                 <Switch
                   checked={settings.voiceOutput}
-                  onCheckedChange={(checked) => updateSetting('voiceOutput\', checked)}
+                  onCheckedChange={(checked) => updateSetting('voiceOutput', checked)}
+                />
+              </div>
+
+              <Separator />
+
+              {/* Add more settings sections here if needed */}
+            </CardContent>
+          </Card>
+
+          {/* Fact-Check Settings */}
+          <Card className="bg-zinc-900 border-zinc-800">
+            <CardHeader>
+              <CardTitle>Fact-Check Preferences</CardTitle>
+              <CardDescription>
+                Control how fact-checking operates in real time
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-sm font-medium">Auto Fact-Check</Label>
+                  <p className="text-xs text-zinc-400">Automatically check facts as you speak</p>
+                </div>
+                <Switch
+                  checked={settings.autoFactCheck}
+                  onCheckedChange={(checked) => updateSetting('autoFactCheck', checked)}
+                />
+              </div>
+
+              <Separator />
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-sm font-medium">Confidence Threshold</Label>
+                  <p className="text-xs text-zinc-400">Minimum confidence for flagging content</p>
+                </div>
+                <input
+                  type="range"
+                  min={50}
+                  max={100}
+                  value={settings.confidenceThreshold}
+                  onChange={e => updateSetting('confidenceThreshold', Number(e.target.value))}
+                  className="w-32 accent-emerald-500"
+                />
+                <span className="ml-2">{settings.confidenceThreshold}%</span>
+              </div>
+
+              <Separator />
+
+              <div>
+                <Label className="text-sm font-medium mb-2 block">Source Types</Label>
+                <div className="flex flex-wrap gap-2">
+                  {sourceTypeOptions.map(option => (
+                    <label key={option.id} className="flex items-center gap-1 bg-zinc-800 px-2 py-1 rounded cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.sourceTypes.includes(option.id)}
+                        onChange={e => handleSourceTypeChange(option.id, e.target.checked)}
+                        className="accent-emerald-500"
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <Separator />
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-sm font-medium">Max Sources Per Check</Label>
+                  <p className="text-xs text-zinc-400">Limit the number of sources checked per fact</p>
+                </div>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={settings.maxSourcesPerCheck}
+                  onChange={e => updateSetting('maxSourcesPerCheck', Number(e.target.value))}
+                  className="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-white"
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
