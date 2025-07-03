@@ -4,18 +4,19 @@
 // I'm not including the full implementation here as it would be redundant
 // In a real implementation, you would move the existing code from app/mobile-companion/page.tsx here
 
-import { useState, useEffect } from "react";
-import { Shield, Mic, MessageSquare, Headphones, Loader2 } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Shield, Mic, MessageSquare, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useWebSocket } from "@/lib/hooks/use-websocket";
-import VoiceService from "@/lib/services/voice-service";
+import { VoiceService } from "@/lib/services/voice-service";
+import { useSpeechToText } from "@/lib/hooks/use-speech-to-text";
+import { useVoiceCommands } from "@/lib/hooks/use-voice-commands";
 
 interface FactCheckResult {
   claim: string;
-  sources: any[];
+  sources: unknown[];
   summary: string;
   confidence: number;
   timestamp: string;
@@ -27,27 +28,22 @@ interface Settings {
   autoSave: boolean;
 }
 
-interface SpeechRecognitionEvent {
-  results: SpeechRecognitionResultList;
-}
-
 export function MobileCompanionContent() {
-  const [isRecording, setIsRecording] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
   const [textInput, setTextInput] = useState("");
   const [factChecks, setFactChecks] = useState<FactCheckResult[]>([]);
-  const [voiceCommand, setVoiceCommand] = useState("");
   const [settings, setSettings] = useState<Settings>({
     mode: "hybrid",
     voiceResponse: true,
     autoSave: true,
   });
 
-  const { sendMessage, isConnected } = useWebSocket();
-
   const voiceService = VoiceService.getInstance();
 
-  const handleFactCheck = async (content: string) => {
+  // Speech-to-text and voice command integration
+  const { transcript, listening, start, stop } = useSpeechToText();
+  const { command, parameters, reset } = useVoiceCommands(transcript);
+
+  const handleFactCheck = useCallback(async (content: string) => {
     try {
       setIsProcessing(true);
       
@@ -77,9 +73,9 @@ export function MobileCompanionContent() {
     } finally {
       setIsProcessing(false);
     }
-  };
+  }, [settings.voiceResponse, textInput, factChecks]);
 
-  const handleSave = async () => {
+  const handleSave = useCallback(async () => {
     // Save current fact-checks to cloud
     try {
       await fetch("/api/multi-modal/session/save", {
@@ -95,9 +91,9 @@ export function MobileCompanionContent() {
     } catch (error) {
       console.error("Error saving fact-checks:", error);
     }
-  };
+  }, [factChecks]);
 
-  const handleShare = async () => {
+  const handleShare = useCallback(async () => {
     // Share fact-checks via social media or email
     try {
       const shareData = {
@@ -111,65 +107,36 @@ export function MobileCompanionContent() {
     } catch (error) {
       console.error("Error sharing fact-checks:", error);
     }
-  };
+  }, [factChecks]);
 
-  const handleReadSources = async () => {
+  const handleReadSources = useCallback(async () => {
     if (factChecks.length === 0) return;
     
     const latestFactCheck = factChecks[factChecks.length - 1];
-    const response = await voiceService.generateResponse({
+    await voiceService.generateResponse({
       claims: [latestFactCheck],
       settings: { voiceType: "source-reader" },
     });
     // Play response
-  };
+  }, [factChecks, voiceService]);
 
+  // Handle detected voice command
   useEffect(() => {
-    // Initialize voice recognition
-    const recognition = new (window as any).SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
-      const transcript = Array.from(event.results)
-        .map((result) => result[0].transcript)
-        .join("");
-      setVoiceCommand(transcript);
-    };
-
-    recognition.onend = () => {
-      if (isRecording) {
-        recognition.start();
-      }
-    };
-
-    return () => {
-      recognition.stop();
-    };
-  }, [isRecording]);
-
-  const handleVoiceCommand = async (command: string) => {
-    try {
-      const { commandType, parameters } = await voiceService.processVoiceCommand(command);
-      
-      switch (commandType) {
-        case "fact-check":
-          await handleFactCheck(parameters.claim);
-          break;
-        case "save":
-          await handleSave();
-          break;
-        case "share":
-          await handleShare();
-          break;
-        case "read-sources":
-          await handleReadSources();
-          break;
-      }
-    } catch (error) {
-      console.error("Error processing voice command:", error);
+    if (!command) return;
+    if (command === "fact-check" && parameters?.claim) {
+      handleFactCheck(parameters.claim);
+      reset();
+    } else if (command === "save") {
+      handleSave();
+      reset();
+    } else if (command === "share") {
+      handleShare();
+      reset();
+    } else if (command === "read-sources") {
+      handleReadSources();
+      reset();
     }
-  };
+  }, [command, parameters, handleFactCheck, handleSave, handleShare, handleReadSources, reset]);
 
   return (
     <div className="min-h-screen bg-black text-white p-4">
@@ -191,17 +158,21 @@ export function MobileCompanionContent() {
               Voice Controls
             </CardTitle>
             <CardDescription>
-              {isRecording ? "Listening..." : "Tap to start voice commands"}
+              {listening ? "Listening..." : "Tap to start voice commands"}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <Button
-              onClick={() => setIsRecording(!isRecording)}
+              onClick={listening ? stop : start}
               className="w-full"
             >
               <Mic className="h-4 w-4 mr-2" />
-              {isRecording ? "Stop Listening" : "Start Listening"}
+              {listening ? "Stop Listening" : "Start Listening"}
             </Button>
+            <div className="mt-2 text-xs text-zinc-400">
+              <div>Transcript: {transcript}</div>
+              <div>Detected Command: {command ? `${command} ${parameters?.claim || ""}` : "-"}</div>
+            </div>
           </CardContent>
         </Card>
 

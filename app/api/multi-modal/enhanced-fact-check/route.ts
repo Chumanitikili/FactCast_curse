@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
         timestamp: Date.now(),
         requireThreeSources,
       })
-    } catch (timeoutError) {
+    } catch (_) {
       return NextResponse.json(
         {
           error: "Fact-check processing timeout",

@@ -103,7 +103,7 @@ redis.on("error", (err) => {
 })
 
 // Query helper with automatic retries and logging
-export async function executeQuery<T = any>(query: string, params: any[] = [], retries = 3): Promise<T[]> {
+export async function executeQuery<T = unknown>(query: string, params: unknown[] = [], retries = 3): Promise<T[]> {
   let client: PoolClient | null = null
 
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -166,7 +166,7 @@ export async function getCached<T>(key: string): Promise<T | null> {
   }
 }
 
-export async function setCached(key: string, value: any, ttlSeconds = 3600): Promise<void> {
+export async function setCached(key: string, value: unknown, ttlSeconds = 3600): Promise<void> {
   try {
     await redis.setex(key, ttlSeconds, JSON.stringify(value))
   } catch (error) {

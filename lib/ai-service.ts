@@ -2,7 +2,7 @@ import type { FactCheckResult } from "./types"
 
 // Mock AI service for fact-checking
 export class AIFactCheckService {
-  static async transcribeAudio(audioBlob: Blob): Promise<string> {
+  static async transcribeAudio(): Promise<string> {
     // Simulate transcription delay
     await new Promise((resolve) => setTimeout(resolve, 2000))
 
@@ -10,7 +10,7 @@ export class AIFactCheckService {
     return `This is a sample transcription of the podcast audio. The speaker mentioned that the Great Wall of China is visible from space, which is actually a common misconception. They also discussed climate change statistics and mentioned that renewable energy accounts for 30% of global electricity generation.`
   }
 
-  static async extractClaims(transcript: string): Promise<string[]> {
+  static async extractClaims(): Promise<string[]> {
     // Simulate claim extraction
     await new Promise((resolve) => setTimeout(resolve, 1000))
 

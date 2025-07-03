@@ -50,7 +50,7 @@ export function FactCheckLoading({
 
       <h3 className="text-xl font-bold mb-2">Fact-Checking in Progress</h3>
 
-      {claim && <p className="text-sm text-zinc-400 text-center mb-6 max-w-md">"{claim}"</p>}
+      {claim && <p className="text-sm text-zinc-400 text-center mb-6 max-w-md">&quot;{claim}&quot;</p>}
 
       <div className="w-full max-w-md space-y-4 mt-4">
         {steps.map((step, index) => (

@@ -1,0 +1,74 @@
+Eleven labs:
+sk_e0cae70c65f78eade01bd0589d2eac5c1c6640855afc557a
+
+
+cohere:
+AyWaYRTgjoDrtl40v0qlMYwPK2JQto07Noj9ag6t
+
+
+Google gemini:
+AIzaSyBvouNU-OM08bAwr5U_m6jlnygfo55inns
+
+
+OpenAI:
+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
+
+
+X/twitter:
+API KEY: YmYsCUzGrEkJVHDIWZwXWCCJ9
+API secret: 6JWMahtClu6u5KfVGcYB0ucQEnUMAuqbfvHZVHEHL2Gr6kYNze
+
+Google Programmable search engine: 
+<script async src="https://cse.google.com/cse.js?cx=d3f01052b42ea4c64">
+</script>
+<div class="gcse-search"></div>
+
+
+
+Google cloud:
+AIzaSyBCIktX7MvpKKO82AGyzq0AdcXJOF43s1A
+
+
+AssemblyAI:
+86c9783cddf94580a6812ebba43d92b5
+
+newsAPI:
+d70de3b84ff14c9380a370d20c2c9490
+
+
+mediastack:
+ef516d74d108526faf7606a9671b5e9e
+
+
+gnews:
+63c3371884dabb660bd9277429de0e5c
+
+
+currentsapi:
+gnfVYncnIr5vy1ZUQlFKS9mkXcSbsdsSgApvIZ_-vCU6mTLO
+
+
+spotify:
+f2d76b9ade8d46a09f747e9c205e9945
+
+
+huggingface:
+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
+
+
+JWT token:
+ff78546c95b42ed5049cfa7a174d6500893c426c58b60de87c62809fa10e4e26a60d0411b618fa822015c3baf4613cb8
+
+JWT refresh token:
+9cc7dda8c9241e8221171257edefe6d501d9a24d7452906252a10372b061d05ea0d248ce4cf4750af4ba6c70fb0f28f6
+
+               
+
+
+
+
+
+
+
+
+

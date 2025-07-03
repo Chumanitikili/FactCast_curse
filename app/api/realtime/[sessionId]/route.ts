@@ -93,7 +93,7 @@ export class RealTimeSessionHandler {
     }
   }
 
-  private async handleMessage(sessionId: string, message: any, websocket: WebSocket) {
+  private async handleMessage(sessionId: string, message: unknown, websocket: WebSocket) {
     switch (message.type) {
       case "start_session":
         await this.startSession(sessionId, message.settings, websocket)
@@ -117,7 +117,7 @@ export class RealTimeSessionHandler {
     }
   }
 
-  private async startSession(sessionId: string, settings: any, websocket: WebSocket) {
+  private async startSession(sessionId: string, settings: unknown, websocket: WebSocket) {
     const session: LiveSession = {
       id: sessionId,
       userId: settings.userId,
@@ -182,7 +182,7 @@ export class RealTimeSessionHandler {
     }
   }
 
-  private async handleManualFactCheck(sessionId: string, message: any, websocket: WebSocket) {
+  private async handleManualFactCheck(sessionId: string, message: unknown, websocket: WebSocket) {
     // Handle manual fact-check trigger
     const mockSegment: TranscriptSegment = {
       id: this.generateId(),
@@ -223,7 +223,7 @@ export class RealTimeSessionHandler {
     }
   }
 
-  private async handleUserCorrection(sessionId: string, message: any, websocket: WebSocket) {
+  private async handleUserCorrection(sessionId: string, message: unknown, websocket: WebSocket) {
     const session = this.sessions.get(sessionId)
     if (!session) return
 
@@ -255,7 +255,7 @@ export class RealTimeSessionHandler {
     return mockTranscripts[Math.floor(Math.random() * mockTranscripts.length)]
   }
 
-  private async generateVoiceAlert(factCheck: any, websocket: WebSocket) {
+  private async generateVoiceAlert(factCheck: unknown, websocket: WebSocket) {
     if (factCheck.flagged) {
       const alertText = `Fact-check alert: The claim "${factCheck.claim}" has low confidence. Please verify.`
 
