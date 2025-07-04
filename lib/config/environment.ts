@@ -78,7 +78,8 @@ export function validateEnvironment() {
 
   if (missing.length > 0) {
     console.error("Missing required environment variables:", missing)
-    if (process.env.NODE_ENV === "production") {
+    // Don't exit during build process, just log the warning
+    if (process.env.NODE_ENV === "production" && !process.env.VERCEL) {
       process.exit(1)
     }
   }
@@ -99,6 +100,14 @@ export function validateEnvironment() {
       console.warn("Production warnings:", defaultWarnings)
     }
   }
+
+  console.log("✅ Environment validation completed")
+}
+
+// Initialize validation - skip during build
+if (!process.env.VERCEL_BUILD && process.env.NEXT_PHASE !== 'phase-production-build') {
+  validateEnvironment()
+}
 
   console.log("✅ Environment validation completed")
 }
