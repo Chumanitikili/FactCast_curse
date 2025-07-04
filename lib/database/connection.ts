@@ -47,9 +47,15 @@ const redisConfig = {
 
 // Create connection pools
 export const db = new Pool(dbConfig)
-export const redis = config.REDIS_CLUSTER_NODES
-  ? new Redis.Cluster(config.REDIS_CLUSTER_NODES.split(","), redisConfig)
-  : new Redis(redisConfig)
+
+// Only create Redis connection if not in build process
+let redis: Redis | Redis.Cluster | null = null
+if (!process.env.VERCEL_BUILD && process.env.NEXT_PHASE !== 'phase-production-build') {
+  redis = config.REDIS_CLUSTER_NODES
+    ? new Redis.Cluster(config.REDIS_CLUSTER_NODES.split(","), redisConfig)
+    : new Redis(redisConfig)
+}
+export { redis }
 
 // Health check functions
 export async function checkDatabaseHealth(): Promise<boolean> {
