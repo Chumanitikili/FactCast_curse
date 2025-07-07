@@ -100,13 +100,15 @@ db.on("error", (err) => {
   console.error("Database connection error:", err)
 })
 
-redis.on("connect", () => {
-  console.log("Redis connection established")
-})
+if (redis) {
+  redis.on("connect", () => {
+    console.log("Redis connection established")
+  })
 
-redis.on("error", (err) => {
-  console.error("Redis connection error:", err)
-})
+  redis.on("error", (err) => {
+    console.error("Redis connection error:", err)
+  })
+}
 
 // Query helper with automatic retries and logging
 export async function executeQuery<T = unknown>(query: string, params: unknown[] = [], retries = 3): Promise<T[]> {
