@@ -1,400 +1,269 @@
 // Simple claim detector for MVP
 // In production, replace with advanced NLP/ML model
 
-import { classifyText } from '@/lib/services/ai-nlp-service';
-import axios from 'axios';
+import { classifyText } from '@/lib/services/ai-nlp-service'; // Keep existing import
+import axios from 'axios'; // Keep existing import
+
+// Import necessary libraries (install them if you haven't already)
+// pnpm install @google/generative-ai openai cohere @huggingface/inference
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import OpenAI from 'openai';
+import cohere from 'cohere-ai';
+import { HfInference } from '@huggingface/inference';
+
+import type { TranscriptSegment } from '../realtime-types'; // Adjust import path if necessary
+import type { FactCheckClaim } from '../types/multi-modal'; // Adjust import path if necessary
+import { executeQuery } from '../database/connection'; // Adjust import path if necessary
+
 
 const CLAIM_KEYWORDS = [
   'is', 'are', 'was', 'were', 'has', 'have', 'had', 'will', 'can', 'could', 'should', 'must', 'did', 'does', 'do', 'claims', 'reports', 'according to', 'study', 'research', 'data', 'statistic', 'survey', 'found', 'shows', 'estimates', 'suggests', 'reveals', 'confirms', 'denies', 'proves', 'disproves', 'states', 'announces', 'declares', 'predicts', 'projects', 'indicates', 'demonstrates', 'concludes', 'asserts', 'alleges', 'affirms', 'contradicts', 'implies', 'implied', 'implies that', 'implied that', 'suggested that', 'suggests that', 'found that', 'shows that', 'estimates that', 'reveals that', 'confirms that', 'denies that', 'proves that', 'disproves that', 'states that', 'announces that', 'declares that', 'predicts that', 'projects that', 'indicates that', 'demonstrates that', 'concludes that', 'asserts that', 'alleges that', 'affirms that', 'contradicts that'
 ];
 
-// API Keys from environment
+// API Keys from environment (Keep existing variables)
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const COHERE_API_KEY = process.env.COHERE_API_KEY;
 const GOOGLE_GEMINI_API_KEY = process.env.GOOGLE_GEMINI_API_KEY;
-const HUGGINGFACE_API_TOKEN = process.env.HUGGINGFACE_API_TOKEN;
+const HUGGINGFACE_API_TOKEN = process.env.HUGGINGFACE_API_TOKEN; // Note: Using API_TOKEN as in your existing file
 
-interface ClaimDetectionRequest {
-  text: string;
-  context?: string;
-  confidence?: number;
+// --- Initialize API Clients (Using the existing variables) ---
+
+// Google Gemini
+const genAI = GOOGLE_GEMINI_API_KEY ? new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY) : null;
+const geminiModel = genAI?.getGenerativeModel({ model: "gemini-pro" }); // Or other suitable model
+
+// OpenAI
+const openaiClient = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+
+// Cohere
+if (COHERE_API_KEY) {
+  cohere.init(COHERE_API_KEY);
+} else {
+    console.warn("COHERE_API_KEY environment variable not set. Cohere integration disabled.");
 }
 
-interface ClaimDetectionResponse {
-  claims: Array<{
-    text: string;
-    confidence: number;
-    type: 'factual' | 'opinion' | 'prediction' | 'quote';
-    entities: string[];
-    source?: string;
-  }>;
-  provider: string;
-  totalClaims: number;
-}
+// Hugging Face Inference
+const hf = HUGGINGFACE_API_TOKEN ? new HfInference(HUGGINGFACE_API_TOKEN) : null; // Using API_TOKEN
 
-interface FactCheckRequest {
-  claim: string;
-  context?: string;
-  sources?: string[];
-}
 
-interface FactCheckResponse {
-  verdict: 'true' | 'false' | 'misleading' | 'unverified' | 'opinion';
-  confidence: number;
-  explanation: string;
-  sources: string[];
-  provider: string;
-  reasoning: string;
-}
+// --- Claim Detection Logic ---
 
-// OpenAI GPT-4 Claim Detection
-async function openAIClaimDetection(request: ClaimDetectionRequest): Promise<ClaimDetectionResponse | null> {
-  if (!OPENAI_API_KEY) return null;
-  
-  try {
-    const prompt = `Analyze the following text and extract factual claims that can be verified. Focus on statements that make specific assertions about facts, statistics, events, or people.
+export async function detectClaims(text: string, segmentId: string, sessionId: string): Promise<FactCheckClaim[]> {
+    const detectedClaims: FactCheckClaim[] = [];
 
-Text: "${request.text}"
-${request.context ? `Context: "${request.context}"` : ''}
-
-Return a JSON array of claims with the following structure:
-[{
-  "text": "the specific claim made",
-  "confidence": 0.0-1.0,
-  "type": "factual|opinion|prediction|quote",
-  "entities": ["person", "place", "organization", "date"],
-  "source": "who made the claim (if mentioned)"
-}]`;
-
-    const response = await axios.post('https://api.openai.com/v1/chat/completions', {
-      model: 'gpt-4',
-      messages: [
-        { role: 'system', content: 'You are a professional fact-checking assistant. Extract verifiable claims from text.' },
-        { role: 'user', content: prompt }
-      ],
-      max_tokens: 1000,
-      temperature: 0.1,
-    }, {
-      headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const content = response.data.choices[0]?.message?.content?.trim();
-    if (!content) return null;
-
-    try {
-      const claims = JSON.parse(content);
-      return {
-        claims,
-        provider: 'OpenAI GPT-4',
-        totalClaims: claims.length,
-      };
-    } catch (parseError) {
-      console.error('Failed to parse OpenAI response:', parseError);
-      return null;
-    }
-  } catch (error) {
-    console.error('OpenAI claim detection failed:', error);
-    return null;
-  }
-}
-
-// Cohere Claim Detection
-async function cohereClaimDetection(request: ClaimDetectionRequest): Promise<ClaimDetectionResponse | null> {
-  if (!COHERE_API_KEY) return null;
-  
-  try {
-    const response = await axios.post('https://api.cohere.ai/v1/classify', {
-      inputs: [request.text],
-      examples: [
-        { text: "The population of New York City is 8.8 million people", label: "factual" },
-        { text: "I think this policy is good for the economy", label: "opinion" },
-        { text: "The stock market will rise 10% next year", label: "prediction" },
-        { text: "According to the report, sales increased by 15%", label: "quote" },
-      ],
-      model: 'large',
-    }, {
-      headers: {
-        'Authorization': `Bearer ${COHERE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const classification = response.data.classifications[0];
-    if (!classification) return null;
-
-    // Extract claims using NER
-    const nerResponse = await axios.post('https://api.cohere.ai/v1/generate', {
-      model: 'command',
-      prompt: `Extract named entities and factual claims from: "${request.text}"`,
-      max_tokens: 200,
-      temperature: 0.1,
-    }, {
-      headers: {
-        'Authorization': `Bearer ${COHERE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const entities = nerResponse.data.generations[0]?.text?.trim();
-    
-    return {
-      claims: [{
-        text: request.text,
-        confidence: classification.confidence || 0.7,
-        type: classification.prediction as any,
-        entities: entities ? entities.split(',').map(e => e.trim()) : [],
-      }],
-      provider: 'Cohere',
-      totalClaims: 1,
-    };
-  } catch (error) {
-    console.error('Cohere claim detection failed:', error);
-    return null;
-  }
-}
-
-// Google Gemini Claim Detection
-async function geminiClaimDetection(request: ClaimDetectionRequest): Promise<ClaimDetectionResponse | null> {
-  if (!GOOGLE_GEMINI_API_KEY) return null;
-  
-  try {
-    const prompt = `Analyze this text and extract factual claims: "${request.text}"
-
-Return a JSON array of claims with structure:
-[{
-  "text": "the specific claim",
-  "confidence": 0.0-1.0,
-  "type": "factual|opinion|prediction|quote",
-  "entities": ["entities mentioned"],
-  "source": "source if mentioned"
-}]`;
-
-    const response = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GOOGLE_GEMINI_API_KEY}`, {
-      contents: [{
-        parts: [{
-          text: prompt
-        }]
-      }],
-      generationConfig: {
-        maxOutputTokens: 1000,
-        temperature: 0.1,
-      },
-    });
-
-    const content = response.data.candidates[0]?.content?.parts[0]?.text?.trim();
-    if (!content) return null;
-
-    try {
-      const claims = JSON.parse(content);
-      return {
-        claims,
-        provider: 'Google Gemini',
-        totalClaims: claims.length,
-      };
-    } catch (parseError) {
-      console.error('Failed to parse Gemini response:', parseError);
-      return null;
-    }
-  } catch (error) {
-    console.error('Gemini claim detection failed:', error);
-    return null;
-  }
-}
-
-// Hugging Face Claim Detection
-async function huggingFaceClaimDetection(request: ClaimDetectionRequest): Promise<ClaimDetectionResponse | null> {
-  if (!HUGGINGFACE_API_TOKEN) return null;
-  
-  try {
-    // Use a text classification model for claim detection
-    const response = await axios.post('https://api-inference.huggingface.co/models/facebook/bart-large-mnli', {
-      inputs: request.text,
-      parameters: {
-        candidate_labels: ["factual claim", "opinion", "prediction", "quote"],
-      },
-    }, {
-      headers: {
-        'Authorization': `Bearer ${HUGGINGFACE_API_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const result = response.data;
-    if (!result.labels || !result.scores) return null;
-
-    const maxScoreIndex = result.scores.indexOf(Math.max(...result.scores));
-    const claimType = result.labels[maxScoreIndex].replace(' ', '_') as any;
-
-    return {
-      claims: [{
-        text: request.text,
-        confidence: result.scores[maxScoreIndex],
-        type: claimType,
-        entities: [], // Would need NER model for entities
-      }],
-      provider: 'Hugging Face',
-      totalClaims: 1,
-    };
-  } catch (error) {
-    console.error('Hugging Face claim detection failed:', error);
-    return null;
-  }
-}
-
-// Simple rule-based claim detection fallback
-function ruleBasedClaimDetection(text: string): ClaimDetectionResponse {
-  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 10);
-  const claims = sentences.map(sentence => {
-    const words = sentence.toLowerCase().split(' ');
-    let type: 'factual' | 'opinion' | 'prediction' | 'quote' = 'factual';
-    let confidence = 0.6;
-
-    // Simple heuristics
-    if (words.some(w => ['think', 'believe', 'feel', 'opinion'].includes(w))) {
-      type = 'opinion';
-      confidence = 0.8;
-    } else if (words.some(w => ['will', 'going to', 'predict', 'forecast'].includes(w))) {
-      type = 'prediction';
-      confidence = 0.7;
-    } else if (words.some(w => ['said', 'according to', 'reported', 'stated'].includes(w))) {
-      type = 'quote';
-      confidence = 0.75;
+    if (!text || text.trim() === "") {
+        return detectedClaims; // Return empty array if text is empty
     }
 
-    return {
-      text: sentence.trim(),
-      confidence,
-      type,
-      entities: [],
-    };
-  });
+    // **TODO: Implement your advanced claim detection logic using the initialized API clients**
+    // This is where you'll decide which model(s) to use and how.
 
-  return {
-    claims,
-    provider: 'Rule-based Fallback',
-    totalClaims: claims.length,
-  };
+    // --- Example: Using OpenAI for Claim Detection ---
+    if (openaiClient) {
+        try {
+            const prompt = `Analyze the following text and identify factual claims that can be verified.
+            Extract each claim as a short, concise sentence.
+            Return a JSON object with a single key "claims" which is an array of strings, where each string is a detected claim.
+            If no factual claims are found, return {"claims": []}.
+
+            Text: "${text}"
+
+            JSON Claims:`;
+
+            const completion = await openaiClient.chat.completions.create({
+                model: "gpt-4o", // Or other suitable OpenAI model
+                messages: [{ role: "user", content: prompt }],
+                temperature: 0.2, // Keep temperature low for factual extraction
+                max_tokens: 500,
+                 response_format: { type: "json_object" }, // Request JSON output
+            });
+
+            const responseContent = completion.choices[0].message.content;
+             console.log("OpenAI Claim Detection Response:", responseContent);
+
+
+            if (responseContent) {
+                try {
+                    const parsedResponse = JSON.parse(responseContent);
+                     const claimsArray = parsedResponse.claims as string[];
+
+                    if (Array.isArray(claimsArray)) {
+                        for (const claimText of claimsArray) {
+                             if (claimText && claimText.trim() !== "") {
+                                const claim: FactCheckClaim = {
+                                    id: `claim_${Date.now()}_openai_${Math.random().toString(36).substr(2, 9)}`,
+                                    text: claimText,
+                                    timestamp: Date.now(), // Or use the segment timestamp
+                                    confidence: 0.7, // Assign a default confidence
+                                    type: "auto_detected",
+                                    sessionId: sessionId,
+                                };
+                                detectedClaims.push(claim);
+                             }
+                        }
+                    }
+                } catch (parseError) {
+                    console.error("Failed to parse OpenAI claim detection response:", parseError);
+                    // Handle parsing error - maybe log the raw response for debugging
+                     console.error("Raw OpenAI response:", responseContent);
+                }
+            }
+
+        } catch (error) {
+            console.error("OpenAI Claim Detection Error:", error);
+            // Handle API error
+        }
+    }
+
+    // --- Example: Using Google Gemini for Claim Detection (as a fallback or alternative) ---
+     if (geminiModel && detectedClaims.length === 0) { // Example: Use Gemini if no claims detected yet
+         try {
+             const prompt = `Identify factual claims in the following text. Provide each claim as a concise statement.
+             Format the output as a JSON array of strings. If no claims are found, return an empty array [].
+
+             Text: "${text}"
+
+             JSON Output:`;
+
+             const result = await geminiModel.generateContent(prompt);
+             const response = result.response;
+             const responseText = response.text();
+             console.log("Gemini Claim Detection Response:", responseText);
+
+             if (responseText) {
+                 try {
+                     const claimsArray = JSON.parse(responseText) as string[]; // Assuming JSON array output
+                     if (Array.isArray(claimsArray)) {
+                         for (const claimText of claimsArray) {
+                              if (claimText && claimText.trim() !== "") {
+                                 const claim: FactCheckClaim = {
+                                     id: `claim_${Date.now()}_gemini_${Math.random().toString(36).substr(2, 9)}`,
+                                     text: claimText,
+                                     timestamp: Date.now(), // Or use the segment timestamp
+                                     confidence: 0.6, // Assign a default confidence
+                                     type: "auto_detected",
+                                     sessionId: sessionId,
+                                 };
+                                 detectedClaims.push(claim);
+                              }
+                         }
+                     }
+                 } catch (parseError) {
+                     console.error("Failed to parse Gemini claim detection response:", parseError);
+                     // Handle parsing error
+                      console.error("Raw Gemini response:", responseText);
+                 }
+             }
+
+         } catch (error) {
+             console.error("Gemini Claim Detection Error:", error);
+             // Handle API error
+         }
+     }
+
+
+     // --- Example: Using Hugging Face for a specific Claim Detection model ---
+     // Find a suitable claim detection model on Hugging Face Hub and use it here.
+     // This example uses a zero-shot classification model for illustration.
+    if (hf && detectedClaims.length === 0) { // Example: Use Hugging Face as a fallback
+        try {
+            // Using a zero-shot classification model to identify if the text is likely a claim
+            // You might need to process the text sentence by sentence for better results
+            const zeroShotClassificationResult = await hf.zeroShotClassification({
+                model: 'facebook/bart-large-mnli', // Example model - find one suitable for claims
+                inputs: text,
+                parameters: { candidate_labels: ['factual statement', 'opinion', 'question'], multi_label: false },
+            });
+            console.log("Hugging Face Zero-Shot Classification:", zeroShotClassificationResult);
+
+            // If the model confidently classifies the text as a "factual statement", consider it a potential claim.
+            const potentialClaimLabel = zeroShotClassificationResult.labels[0];
+            const potentialClaimScore = zeroShotClassificationResult.scores[0];
+
+            if (potentialClaimLabel === 'factual statement' && potentialClaimScore > 0.8) { // Adjust confidence threshold
+                 const claim: FactCheckClaim = {
+                     id: `claim_${Date.now()}_hf_${Math.random().toString(36).substr(2, 9)}`,
+                     text: text.trim(), // Use the whole text segment as the claim for this model
+                     timestamp: Date.now(), // Or use segment timestamp
+                     confidence: potentialClaimScore, // Use model's confidence
+                     type: "auto_detected",
+                     sessionId: sessionId,
+                 };
+                 detectedClaims.push(claim);
+            }
+
+
+        } catch (error) {
+            console.error("Hugging Face Inference Error:", error);
+            // Handle API error
+        }
+    }
+
+    // --- Cohere can be used for supporting NLP tasks like NER or Classification ---
+    // Integrate Cohere here if its capabilities (like entity recognition) can
+    // help refine your claim detection logic from other models.
+    // Example: If you use another model to identify sentences that are *potentially* claims,
+    // you could then use Cohere's NER to extract key entities from those sentences.
+     /*
+     if (cohereApiKey && detectedClaims.length > 0) { // Example: If claims were detected by other models
+         try {
+              for (const claim of detectedClaims) {
+                  const { body } = await cohere.annotate({
+                      text: claim.text,
+                       model: 'large',
+                  });
+                  console.log(`Cohere Entities for claim "${claim.text}":`, body.annotations);
+                  // Store or use these entities as needed
+              }
+         } catch (error) {
+             console.error("Cohere Annotate Error:", error);
+         }
+     }
+     */
+
+
+    // **TODO: Refine confidence scoring based on the outputs of the models used**
+    // The current confidence scores (0.7, 0.6, potentialClaimScore) are examples.
+    // You should devise a way to assign a more accurate confidence based on:
+    // - Which model(s) detected the claim.
+    // - The confidence scores provided by the models (if any).
+    // - Potential agreement or disagreement between multiple models.
+
+    // Save the detected claims to the database
+    for (const claim of detectedClaims) {
+        await saveClaimToDatabase(claim);
+    }
+
+
+    return detectedClaims;
 }
 
-// Main claim detection function with fallback chain
-export async function detectClaims(request: ClaimDetectionRequest): Promise<ClaimDetectionResponse> {
-  const { text, context, confidence = 0.7 } = request;
-  
-  // Try AI providers in order of preference
-  const providers = [
-    () => openAIClaimDetection(request),
-    () => cohereClaimDetection(request),
-    () => geminiClaimDetection(request),
-    () => huggingFaceClaimDetection(request),
-  ];
-  
-  for (const provider of providers) {
+// **TODO: Implement this function to save claims to your database**
+// This function should insert a FactCheckClaim object into your 'claims' table.
+async function saveClaimToDatabase(claim: FactCheckClaim): Promise<void> {
+    console.log("Saving claim to database:", claim); // Placeholder
     try {
-      const result = await provider();
-      if (result && result.claims.length > 0) {
-        return result;
-      }
+         await executeQuery(
+            "INSERT INTO claims (id, session_id, text, timestamp, confidence, type, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            [claim.id, claim.sessionId, claim.text, claim.timestamp, claim.confidence, claim.type, (claim as any).userId || null] // Assuming userId might be on manual claims
+         );
+         console.log(`Claim ${claim.id} saved to database.`);
     } catch (error) {
-      console.warn('Claim detection provider failed, trying next:', error);
-      continue;
+         console.error(`Error saving claim ${claim.id} to database:`, error);
+         // Depending on your error handling strategy, you might not want to re-throw here
+         // if a single failed save shouldn't stop the whole process.
     }
-  }
-  
-  // Fallback to rule-based detection
-  return ruleBasedClaimDetection(text);
 }
 
-// Fact-checking with AI providers
-async function openAIFactCheck(request: FactCheckRequest): Promise<FactCheckResponse | null> {
-  if (!OPENAI_API_KEY) return null;
-  
-  try {
-    const prompt = `Fact-check the following claim: "${request.claim}"
-
-${request.context ? `Context: "${request.context}"` : ''}
-${request.sources ? `Available sources: ${request.sources.join(', ')}` : ''}
-
-Provide a verdict and explanation. Return JSON:
-{
-  "verdict": "true|false|misleading|unverified|opinion",
-  "confidence": 0.0-1.0,
-  "explanation": "brief explanation",
-  "reasoning": "detailed reasoning"
-}`;
-
-    const response = await axios.post('https://api.openai.com/v1/chat/completions', {
-      model: 'gpt-4',
-      messages: [
-        { role: 'system', content: 'You are a professional fact-checker. Be objective and evidence-based.' },
-        { role: 'user', content: prompt }
-      ],
-      max_tokens: 500,
-      temperature: 0.1,
-    }, {
-      headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const content = response.data.choices[0]?.message?.content?.trim();
-    if (!content) return null;
-
-    try {
-      const result = JSON.parse(content);
-      return {
-        ...result,
-        sources: request.sources || [],
-        provider: 'OpenAI GPT-4',
-      };
-    } catch (parseError) {
-      console.error('Failed to parse OpenAI fact-check response:', parseError);
-      return null;
-    }
-  } catch (error) {
-    console.error('OpenAI fact-check failed:', error);
-    return null;
-  }
-}
-
-// Main fact-checking function
-export async function factCheckClaim(request: FactCheckRequest): Promise<FactCheckResponse> {
-  const { claim, context, sources } = request;
-  
-  // Try OpenAI first
-  const openAIResult = await openAIFactCheck(request);
-  if (openAIResult) {
-    return openAIResult;
-  }
-  
-  // Fallback: simple heuristic-based fact-checking
-  const words = claim.toLowerCase().split(' ');
-  let verdict: 'true' | 'false' | 'misleading' | 'unverified' | 'opinion' = 'unverified';
-  let confidence = 0.3;
-  let explanation = 'Unable to verify with available sources.';
-  
-  // Simple heuristics
-  if (words.some(w => ['think', 'believe', 'feel', 'opinion'].includes(w))) {
-    verdict = 'opinion';
-    confidence = 0.8;
-    explanation = 'This appears to be an opinion rather than a factual claim.';
-  } else if (words.some(w => ['will', 'going to', 'predict'].includes(w))) {
-    verdict = 'unverified';
-    confidence = 0.5;
-    explanation = 'This is a prediction that cannot be fact-checked at present.';
-  }
-  
-  return {
-    verdict,
-    confidence,
-    explanation,
-    reasoning: explanation,
-    sources: sources || [],
-    provider: 'Heuristic Fallback',
-  };
-}
-
-// TODO: Integrate advanced NLP/ML model for claim detection 
+// You will also need to ensure your database schema (claims table) supports the FactCheckClaim structure.
+// Example (from our earlier schema refinement):
+// CREATE TABLE IF NOT EXISTS claims (
+//     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+//     session_id UUID REFERENCES live_sessions(id) ON DELETE CASCADE,
+//     text TEXT NOT NULL,
+//     timestamp BIGINT NOT NULL, -- Using BIGINT for timestamp_ms
+//     confidence DECIMAL(5,4),   -- Using DECIMAL for confidence 0.0 to 1.0
+//     type VARCHAR(50) NOT NULL CHECK (type IN ('auto_detected', 'manual', 'voice_command')),
+//     user_id UUID REFERENCES users(id) ON DELETE SET NULL, -- Link to user for manual/voice claims
+//     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+// );

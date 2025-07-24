@@ -1,10 +1,12 @@
 import { Server as SocketIOServer } from "socket.io"
 import { createAdapter } from "@socket.io/redis-adapter"
 import { redis } from "../database/connection"
-import { verifyAccessToken } from "../auth/security"
-import { factCheckingQueue } from "../queue/processor"
+import { verifyAccessToken } from "../auth/security" // Assuming this is your token verification function
+import { factCheckingQueue } from "../queue/processor" // Assuming you have a fact checking queue
 import type { Server as HTTPServer } from "http"
-import { executeQuery } from "../database/executeQuery"
+import { executeQuery } from "../database/executeQuery" // Assuming this is your database query function
+import { AssemblyAIRealtimeProcessor } from '../services/assemblyai-realtime'; // Adjust import path if necessary
+import { detectClaims } from '../engines/claim-detector'; // Adjust import path if necessary - Assuming this is your claim detection function
 
 export interface SocketData {
   userId: string
@@ -29,6 +31,7 @@ export interface ServerToClientEvents {
   "voice-alert": (alert: any) => void
   "session-stats": (stats: any) => void
   error: (message: string) => void
+  "settings-updated": (settings: any) => void // Added for broadcasting settings updates
 }
 
 export interface InterServerEvents {
@@ -36,6 +39,10 @@ export interface InterServerEvents {
 }
 
 let io: SocketIOServer<ClientToServerEvents, ServerToClientEvents, InterServerEvents, SocketData>
+
+// Add Processor Map: Add the following line outside of any function or class to store active AssemblyAI processors:
+const activeAssemblyAIProcessors = new Map<string, AssemblyAIRealtimeProcessor>();
+
 
 export function initializeWebSocketServer(httpServer: HTTPServer) {
   io = new SocketIOServer(httpServer, {
@@ -65,9 +72,10 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
         return next(new Error("Authentication required"))
       }
 
+      // Assuming verifyAccessToken decodes the token and returns user payload
       const payload = verifyAccessToken(token)
-      if (!payload) {
-        return next(new Error("Invalid token"))
+      if (!payload || !payload.userId) { // Ensure payload and userId exist
+        return next(new Error("Invalid token payload"))
       }
 
       // Store user data in socket
@@ -75,6 +83,7 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
 
       next()
     } catch (error) {
+      console.error("WebSocket Authentication Error:", error); // Log the error
       next(new Error("Authentication failed"))
     }
   })
@@ -85,17 +94,21 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
     const rateLimitKey = `ws_rate_limit:${userId}`
 
     try {
-      const current = (await redis.get(rateLimitKey)) || "0"
-      const count = Number.parseInt(current)
+      // Using Redis INCR to atomically increment and check
+      const count = await redis.incr(rateLimitKey);
+      if (count === 1) {
+          // Set expiry for the first request in the window (e.g., 60 seconds)
+          await redis.expire(rateLimitKey, 60); // Rate limit window: 60 seconds
+      }
 
-      if (count > 100) {
-        // 100 connections per minute
+      const limit = 100; // 100 connections per 60 seconds
+      if (count > limit) {
         return next(new Error("Rate limit exceeded"))
       }
 
-      await redis.setex(rateLimitKey, 60, count + 1)
       next()
     } catch (error) {
+      console.error("WebSocket Rate Limiting Error:", error); // Log the error
       next(new Error("Rate limiting failed"))
     }
   })
@@ -124,20 +137,91 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
         socket.emit("session-stats", stats)
 
         console.log(`User ${socket.data.userId} joined session ${sessionId}`)
+
+        // **Initialize and connect AssemblyAI Realtime Processor for this session**
+        const processor = new AssemblyAIRealtimeProcessor({
+            sessionId,
+            onTranscript: async (segment) => { // Make this async to await database operations and claim detection
+                // Handle the final transcript segment received from AssemblyAI
+                // Broadcast transcript to all session participants
+                io.to(`session:${sessionId}`).emit("transcript-segment", segment);
+
+                // **Trigger claim detection here**
+                // You would call your claim detection logic with segment.text
+                // and potentially queue a fact-checking job if a claim is detected.
+                try {
+                    const session = await getSession(sessionId); // Get session settings to check autoFactCheck
+                    // Assuming detectClaims returns an array of detected claims
+                    const detectedClaims = await detectClaims(segment.text, segment.id, sessionId);
+
+                    if (session?.settings?.autoFactCheck && detectedClaims && detectedClaims.length > 0) {
+                         for (const claim of detectedClaims) {
+                             // Queue fact-checking job for each detected claim
+                             const job = await factCheckingQueue.add("verify-claim", {
+                               sessionId: sessionId,
+                               segmentId: segment.id, // Link claim to segment
+                               claim: claim.text,
+                               timestamp: claim.timestamp,
+                               settings: session.settings, // Pass session settings to the job
+                               claimId: claim.id, // Pass claim ID to the job
+                             });
+
+                             io.to(`session:${sessionId}`).emit("fact-check-started", {
+                               segmentId: segment.id,
+                               jobId: job.id,
+                               claimId: claim.id,
+                               claimText: claim.text, // Include claim text for frontend display
+                             });
+                         }
+                    }
+                } catch (error) {
+                    console.error("Error during claim detection trigger:", error);
+                    // Handle error appropriately - maybe emit an error to the client
+                     socket.emit("fact-check-error", {
+                        segmentId: segment.id,
+                        error: "Failed to process claim detection."
+                     });
+                }
+            },
+            onError: (error) => {
+                // Handle errors from AssemblyAI
+                 console.error(`AssemblyAI error for session ${sessionId}:`, error); // Log the error
+                 socket.emit("error", `AssemblyAI error: ${error.message}`);
+            },
+            onClose: (code, reason) => {
+                // Handle AssemblyAI connection closed
+                console.log(`AssemblyAI connection closed for session ${sessionId}: ${code} - ${reason}`);
+                activeAssemblyAIProcessors.delete(sessionId); // Clean up
+            },
+        });
+
+        activeAssemblyAIProcessors.set(sessionId, processor);
+
+        // Connect to AssemblyAI Realtime Service
+        processor.connect();
+
+
       } catch (error) {
-        console.error("Join session error:", error)
-        socket.emit("error", "Failed to join session")
+        console.error("Join session error:", error);
+        socket.emit("error", "Failed to join session");
       }
     })
 
     // Leave session
     socket.on("leave-session", async (sessionId) => {
       try {
-        await socket.leave(`session:${sessionId}`)
-        socket.data.sessionId = undefined
-        console.log(`User ${socket.data.userId} left session ${sessionId}`)
+        // **Close the AssemblyAI Realtime Processor for this session**
+        const processor = activeAssemblyAIProcessors.get(sessionId);
+        if (processor) {
+            processor.close();
+            activeAssemblyAIProcessors.delete(sessionId);
+        }
+
+        await socket.leave(`session:${sessionId}`);
+        socket.data.sessionId = undefined;
+        console.log(`User ${socket.data.userId} left session ${sessionId}`);
       } catch (error) {
-        console.error("Leave session error:", error)
+        console.error("Leave session error:", error);
       }
     })
 
@@ -145,38 +229,43 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
     socket.on("audio-chunk", async (data) => {
       try {
         if (!socket.data.sessionId) {
-          socket.emit("error", "No active session")
-          return
+          socket.emit("error", "No active session");
+          return;
         }
 
-        // Process audio chunk
-        const transcript = await processAudioChunk(data, socket.data.sessionId)
-
-        if (transcript) {
-          // Broadcast transcript to all session participants
-          io.to(`session:${socket.data.sessionId}`).emit("transcript-segment", transcript)
-
-          // Check if auto fact-checking is enabled
-          const session = await getSession(socket.data.sessionId)
-          if (session?.settings?.autoFactCheck && containsFactualClaim(transcript.text)) {
-            // Queue fact-checking job
-            const job = await factCheckingQueue.add("verify-claim", {
-              sessionId: socket.data.sessionId,
-              segmentId: transcript.id,
-              claim: transcript.text,
-              timestamp: transcript.timestamp,
-              settings: session.settings,
-            })
-
-            io.to(`session:${socket.data.sessionId}`).emit("fact-check-started", {
-              segmentId: transcript.id,
-              jobId: job.id,
-            })
-          }
+        // **Send the audio chunk to the AssemblyAI Realtime Processor**
+        const processor = activeAssemblyAIProcessors.get(socket.data.sessionId);
+        if (processor) {
+            processor.sendAudioChunk(data);
+        } else {
+             socket.emit("error", "AssemblyAI processor not initialized for this session");
         }
+
+        // **Remove or comment out the old mock audio processing call:**
+        // const transcript = await processAudioChunk(data, socket.data.sessionId);
+        // if (transcript) {
+        //   io.to(`session:${socket.data.sessionId}`).emit("transcript-segment", transcript);
+        //   // Check if auto fact-checking is enabled
+        //   const session = await getSession(socket.data.sessionId);
+        //   if (session?.settings?.autoFactCheck && containsFactualClaim(transcript.text)) {
+        //     // Queue fact-checking job
+        //     const job = await factCheckingQueue.add("verify-claim", {
+        //       sessionId: socket.data.sessionId,
+        //       segmentId: transcript.id,
+        //       claim: transcript.text,
+        //       timestamp: transcript.timestamp,
+        //       settings: session.settings,
+        //     });
+        //     io.to(`session:${socket.data.sessionId}`).emit("fact-check-started", {
+        //       segmentId: transcript.id,
+        //       jobId: job.id,
+        //     });
+        //   }
+        // }
+
       } catch (error) {
-        console.error("Audio processing error:", error)
-        socket.emit("error", "Audio processing failed")
+        console.error("Audio chunk handling error:", error); // More specific error log
+        socket.emit("error", "Audio processing failed");
       }
     })
 
@@ -184,8 +273,8 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
     socket.on("manual-fact-check", async (claim) => {
       try {
         if (!socket.data.sessionId) {
-          socket.emit("error", "No active session")
-          return
+          socket.emit("error", "No active session");
+          return;
         }
 
         const session = await getSession(socket.data.sessionId)
@@ -194,14 +283,32 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
           return
         }
 
+        // **TODO: Create a claim object for manual fact-check and save to DB**
+        // Before queuing the job, you might want to create a FactCheckClaim object
+        // for the manual claim and save it to your database, similar to auto-detected claims.
+        const manualClaim = {
+             id: `claim_${Date.now()}_manual_${Math.random().toString(36).substr(2, 9)}`,
+             text: claim,
+             timestamp: Date.now(),
+             confidence: 1.0, // High confidence for manual claims
+             type: "manual",
+             sessionId: socket.data.sessionId,
+             userId: socket.data.userId, // Associate manual claim with user
+        };
+
+        // Assuming you have a function to save a claim to the database
+        await saveClaimToDatabase(manualClaim); // Implement this function
+
         // Queue fact-checking job
         const job = await factCheckingQueue.add(
           "verify-claim",
           {
             sessionId: socket.data.sessionId,
-            claim,
-            timestamp: Date.now(),
+            claim: manualClaim.text,
+            timestamp: manualClaim.timestamp,
             settings: session.settings,
+            claimId: manualClaim.id, // Pass the new claim ID
+            userId: manualClaim.userId, // Pass user ID for manual claims
           },
           {
             priority: 10, // Higher priority for manual requests
@@ -209,8 +316,9 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
         )
 
         socket.emit("fact-check-started", {
-          claim,
+          claim: manualClaim.text,
           jobId: job.id,
+          claimId: manualClaim.id, // Emit the claim ID
         })
       } catch (error) {
         console.error("Manual fact-check error:", error)
@@ -221,7 +329,20 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
     // Voice commands
     socket.on("voice-command", async (command) => {
       try {
-        await handleVoiceCommand(socket, command)
+        // **TODO: Implement voice command handling logic**
+        // This will involve parsing the command text to identify intent (e.g., "fact check this", "read sources")
+        // and parameters.
+        console.log(`Received voice command: ${command}`);
+        await handleVoiceCommand(socket, command); // Use your existing or enhanced handler
+
+        // Example: If the command is a fact-check request:
+        // const parsedCommand = parseVoiceCommand(command); // Implement this function
+        // if (parsedCommand.intent === 'fact_check' && parsedCommand.text) {
+        //     // Trigger a manual fact-check with the command text
+        //     // You might want to call the manual-fact-check logic here or a shared function
+        //     await socket.emit("manual-fact-check", parsedCommand.text);
+        // }
+        // Handle other intents (e.g., 'read_sources', 'save_result', 'toggle_mode')
       } catch (error) {
         console.error("Voice command error:", error)
         socket.emit("error", "Voice command failed")
@@ -232,23 +353,37 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
     socket.on("update-settings", async (settings) => {
       try {
         if (!socket.data.sessionId) {
-          socket.emit("error", "No active session")
-          return
+          socket.emit("error", "No active session");
+          return;
         }
 
-        await updateSessionSettings(socket.data.sessionId, settings)
+        // **TODO: Validate and sanitize incoming settings**
+        // Ensure the settings object conforms to your expected structure (SessionSettings)
+        // and sanitize any user-provided values.
+
+        await updateSessionSettings(socket.data.sessionId, settings);
 
         // Broadcast settings update to all session participants
-        io.to(`session:${socket.data.sessionId}`).emit("settings-updated", settings)
+        io.to(`session:${socket.data.sessionId}`).emit("settings-updated", settings);
+
+        console.log(`Settings updated for session ${socket.data.sessionId}:`, settings);
       } catch (error) {
-        console.error("Settings update error:", error)
-        socket.emit("error", "Settings update failed")
+        console.error("Settings update error:", error);
+        socket.emit("error", "Settings update failed");
       }
     })
 
     // Disconnect handling
     socket.on("disconnect", (reason) => {
       console.log(`User ${socket.data.userId} disconnected: ${reason}`)
+      // **Clean up AssemblyAI processor if the user was in a session**
+      if (socket.data.sessionId) {
+           const processor = activeAssemblyAIProcessors.get(socket.data.sessionId);
+           if (processor) {
+              processor.close();
+              activeAssemblyAIProcessors.delete(socket.data.sessionId);
+           }
+      }
     })
 
     // Error handling
@@ -258,48 +393,72 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
   })
 
   // Queue event handlers for broadcasting results
+  // Assuming the job result structure includes sessionId and the fact-check result data
   factCheckingQueue.on("completed", async (job, result) => {
-    const { sessionId } = job.data
+    const { sessionId, claimId } = job.data; // Get sessionId and claimId from job data
     if (sessionId && result.success) {
+      console.log(`Fact-check job ${job.id} completed for session ${sessionId}.`);
+      // Assuming the result object from the job processor contains the fact-check data
       io.to(`session:${sessionId}`).emit("fact-check-result", {
         jobId: job.id,
-        result: result,
-      })
+        claimId: claimId, // Include claimId in the result
+        result: result.data, // Assuming the actual result data is in result.data
+      });
+    } else if (sessionId && !result.success) {
+         console.error(`Fact-check job ${job.id} failed for session ${sessionId}: ${result.error}`);
+          io.to(`session:${sessionId}`).emit("fact-check-error", {
+            jobId: job.id,
+            claimId: claimId,
+            error: result.error, // Assuming the error message is in result.error
+          });
     }
   })
 
   factCheckingQueue.on("failed", async (job, error) => {
-    const { sessionId } = job.data
+    const { sessionId, claimId } = job.data; // Get sessionId and claimId from job data
     if (sessionId) {
+      console.error(`Fact-check job ${job.id} failed for session ${sessionId}:`, error);
       io.to(`session:${sessionId}`).emit("fact-check-error", {
         jobId: job.id,
+        claimId: claimId,
         error: error.message,
-      })
+      });
     }
   })
 
   return io
 }
 
-// Helper functions
+// Helper functions (assuming these are already implemented or will be)
+
+// Assuming verifyAccessToken is implemented in ../auth/security
+// export function verifyAccessToken(token: string): { userId: string } | null { ... }
+
+// Assuming validateSessionAccess checks if a user has access to a session
 async function validateSessionAccess(userId: string, sessionId: string): Promise<boolean> {
   try {
-    const sessions = await executeQuery("SELECT id FROM live_sessions WHERE id = $1 AND user_id = $2", [
-      sessionId,
-      userId,
-    ])
-    return sessions.length > 0
+    // **TODO: Implement actual session access validation**
+    // Query your database to check if the user is associated with the session.
+    // Example (assuming 'live_sessions' table has 'user_id' and 'id'):
+     const sessions = await executeQuery("SELECT id FROM live_sessions WHERE id = $1 AND user_id = $2", [
+       sessionId,
+       userId,
+     ]);
+     return sessions.length > 0;
   } catch (error) {
-    console.error("Session access validation failed:", error)
-    return false
+    console.error("Session access validation failed:", error);
+    return false;
   }
 }
 
+// Assuming getSessionStats retrieves statistics for a session
 async function getSessionStats(sessionId: string): Promise<any> {
-  try {
+   try {
+    // **TODO: Implement actual session stats retrieval**
+    // Query your database to get relevant statistics.
     const stats = await executeQuery(
       `
-      SELECT 
+      SELECT
         ls.total_duration,
         ls.total_fact_checks,
         COUNT(ts.id) as segment_count,
@@ -311,83 +470,89 @@ async function getSessionStats(sessionId: string): Promise<any> {
       GROUP BY ls.id, ls.total_duration, ls.total_fact_checks
     `,
       [sessionId],
-    )
+    );
 
-    return stats[0] || {}
+    return stats[0] || {};
   } catch (error) {
-    console.error("Get session stats failed:", error)
-    return {}
+    console.error("Get session stats failed:", error);
+    return {};
   }
 }
 
-async function processAudioChunk(audioData: ArrayBuffer, sessionId: string): Promise<any> {
-  // Mock audio processing - integrate with real speech-to-text service
-  const mockTranscript = {
-    id: `segment_${Date.now()}`,
-    sessionId,
-    timestamp: Date.now(),
-    text: "Sample transcribed text from audio chunk",
-    confidence: 0.95,
-  }
 
-  // Save to database
-  await executeQuery(
-    "INSERT INTO transcript_segments (id, session_id, timestamp_ms, text, confidence) VALUES ($1, $2, $3, $4, $5)",
-    [mockTranscript.id, sessionId, mockTranscript.timestamp, mockTranscript.text, mockTranscript.confidence],
-  )
-
-  return mockTranscript
-}
-
+// Assuming getSession retrieves session details
 async function getSession(sessionId: string): Promise<any> {
-  try {
-    const sessions = await executeQuery("SELECT * FROM live_sessions WHERE id = $1", [sessionId])
-    return sessions[0] || null
+   try {
+    // **TODO: Implement actual session retrieval**
+    // Query your database to get session details, including settings.
+     const sessions = await executeQuery("SELECT * FROM live_sessions WHERE id = $1", [sessionId]);
+     return sessions[0] || null;
   } catch (error) {
-    console.error("Get session failed:", error)
-    return null
+    console.error("Get session failed:", error);
+    return null;
   }
 }
 
+// Assuming updateSessionSettings updates session settings in the database
 async function updateSessionSettings(sessionId: string, settings: any): Promise<void> {
-  try {
-    await executeQuery("UPDATE live_sessions SET settings = $1 WHERE id = $2", [JSON.stringify(settings), sessionId])
+   try {
+    // **TODO: Implement actual session settings update**
+    // Update the settings (JSONB column) in your database.
+     await executeQuery("UPDATE live_sessions SET settings = $1 WHERE id = $2", [JSON.stringify(settings), sessionId]);
   } catch (error) {
-    console.error("Update session settings failed:", error)
-    throw error
+    console.error("Update session settings failed:", error);
+    throw error;
   }
 }
 
+// Assuming handleVoiceCommand handles voice commands
 async function handleVoiceCommand(socket: any, command: string): Promise<void> {
-  // Process voice commands
-  switch (command.toLowerCase()) {
+  // **TODO: Implement voice command processing logic**
+  // This is a placeholder. You'll need to parse the command and trigger actions.
+  console.log(`Handling voice command: ${command}`);
+  switch (command.toLowerCase().trim()) {
     case "pause":
       // Handle pause command
-      break
+      console.log("Pause command received");
+      // Trigger session pause logic
+      break;
     case "resume":
       // Handle resume command
-      break
-    case "fact check":
-      // Trigger manual fact check
-      break
+      console.log("Resume command received");
+       // Trigger session resume logic
+      break;
+    // Add other voice commands based on your project brief
+     case "fact check that":
+     case "check that claim":
+         console.log("Fact check command received");
+         // **TODO: Extract the claim text from the command if possible**
+         // For now, this is a basic trigger. You'll need NLP to get the actual claim.
+         socket.emit("manual-fact-check", "the last spoken claim"); // Placeholder claim
+         break;
     default:
-      socket.emit("error", "Unknown voice command")
+      socket.emit("voice-alert", { type: "error", message: "Unknown voice command" }); // Use voice alert
   }
 }
 
-function containsFactualClaim(text: string): boolean {
-  const factualIndicators = [
-    /\d+%/, // percentages
-    /in \d{4}/, // years
-    /according to/, // citations
-    /studies show/, // research claims
-    /data shows/, // data claims
-    /\$[\d,]+/, // monetary amounts
-    /\d+\s*(million|billion|thousand)/, // large numbers
-  ]
-
-  return factualIndicators.some((pattern) => pattern.test(text.toLowerCase()))
+// Assuming saveClaimToDatabase saves a claim to the database
+async function saveClaimToDatabase(claim: any): Promise<void> {
+    // **TODO: Implement actual logic to save claim to database**
+    // Use executeQuery to insert the claim into your 'claims' table.
+     console.log("Saving claim to database (placeholder):", claim);
+     // Example:
+     // await executeQuery(
+     //    "INSERT INTO claims (id, session_id, text, timestamp, confidence, type, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+     //    [claim.id, claim.sessionId, claim.text, claim.timestamp, claim.confidence, claim.type, claim.userId]
+     // );
 }
+
+
+// **Remove the old mock processAudioChunk function:**
+// async function processAudioChunk(...) { ... }
+
+// Remove the old basic containsFactualClaim function, as claim detection is now handled by detectClaims
+// function containsFactualClaim(text: string): boolean { ... }
+
 
 export function getIO() {
   if (!io) {
