@@ -1,30 +1,31 @@
-# Modern ui design
+# FactCast_curse – Multi-Modal Real-Time Fact-Checking (Desktop & Mobile)
 
-*Automatically synced with your [v0.dev](https://v0.dev) deployments*
+## Desktop/PC (Web)
+- React app styled for modern, tactile podcast workflow
+- Color-coded, accessible, responsive UI
+- Real-time updates via API/WebSocket (see `frontend/web`)
 
-[![Deployed on Vercel](https://img.shields.io/badge/Deployed%20on-Vercel-black?style=for-the-badge&logo=vercel)](https://vercel.com/chumanitikilis-projects/v0-modern-ui-design)
-[![Built with v0](https://img.shields.io/badge/Built%20with-v0.dev-black?style=for-the-badge)](https://v0.dev/chat/projects/tByBe86cAAs)
+## Mobile
+- React Native app for iOS/Android
+- Brand-consistent, large controls, color-coded alerts
+- Works with voice, text, and private audio feedback
 
-## Overview
+## Usage
+- Connect both to backend API for real-time fact-checks
+- Desktop: Run `npm install && npm start` in `frontend/web`
+- Mobile: Run `npm install && npx expo start` in `frontend/mobile`
 
-This repository will stay in sync with your deployed chats on [v0.dev](https://v0.dev).
-Any changes you make to your deployed app will be automatically pushed to this repository from [v0.dev](https://v0.dev).
+Backend and API code provided in earlier response.  
+Extend for voice input, push notifications, and advanced multi-modal features as needed.
 
-## Deployment
+---
 
-Your project is live at:
+**Design language:**  
+- Spotify green, Adidas black/white, Apple gradients  
+- Large, readable fonts (Circular, San Francisco, etc.)  
+- Color-coded: Green (Verified), Yellow (Uncertain), Red (False)  
+- Animated, tactile for live podcasting
 
-**[https://vercel.com/chumanitikilis-projects/v0-modern-ui-design](https://vercel.com/chumanitikilis-projects/v0-modern-ui-design)**
+---
 
-## Build your app
-
-Continue building your app on:
-
-**[https://v0.dev/chat/projects/tByBe86cAAs](https://v0.dev/chat/projects/tByBe86cAAs)**
-
-## How It Works
-
-1. Create and modify your project using [v0.dev](https://v0.dev)
-2. Deploy your chats from the v0 interface
-3. Changes are automatically pushed to this repository
-4. Vercel deploys the latest version from this repository
+_Ready for both desktop and mobile. Adapt API endpoints and backend as needed._
