@@ -1,0 +1,12 @@
+{
+  "name": "FactCast",
+  "short_name": "FactCast",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#191414",
+  "theme_color": "#1db954",
+  "icons": [
+    { "src": "icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "icon-512.png", "type": "image/png", "sizes": "512x512" }
+  ]
+}
